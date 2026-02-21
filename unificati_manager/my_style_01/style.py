@@ -26,6 +26,11 @@ class Palette:
     entry_fg: str
     selection_bg: str
     selection_fg: str
+    disabled_bg: str
+    disabled_fg: str
+    sash: str
+    scrollbar_button: str
+    scrollbar_button_hover: str
 
 DARK = Palette(
     bg="#0e1116",
@@ -43,6 +48,11 @@ DARK = Palette(
     entry_fg="#e8eef6",
     selection_bg="#2a3a52",
     selection_fg="#e8eef6",
+    disabled_bg="#1c232e",
+    disabled_fg="#8892a1",
+    sash="#0e1116",
+    scrollbar_button="#273245",
+    scrollbar_button_hover="#3e4e6b",
 )
 
 LIGHT = Palette(
@@ -61,6 +71,11 @@ LIGHT = Palette(
     entry_fg="#111827",
     selection_bg="#dbeafe",
     selection_fg="#111827",
+    disabled_bg="#f3f4f6",
+    disabled_fg="#9ca3af",
+    sash="#f6f7fb",
+    scrollbar_button="#cbd5e1",
+    scrollbar_button_hover="#a8b5c4",
 )
 
 def apply_style(dark: bool = True) -> Palette:

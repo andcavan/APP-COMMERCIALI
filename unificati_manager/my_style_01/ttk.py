@@ -54,3 +54,19 @@ def configure_treeview_style(root, palette) -> None:
         background=[("active", palette.panel)],
         foreground=[("active", palette.fg)],
     )
+
+    # Scrollbar Style
+    style.configure(
+        "TScrollbar",
+        troughcolor=palette.panel_2,
+        background=palette.scrollbar_button,
+        bordercolor=palette.panel_2,
+        arrowcolor=palette.fg,
+        relief="flat",
+    )
+    style.map(
+        "TScrollbar",
+        background=[
+            ("active", palette.scrollbar_button_hover),
+        ],
+    )

@@ -93,7 +93,8 @@ class RoleLoginDialog(ctk.CTkToplevel):
 class App(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
-        self.palette = apply_style(dark=True)
+        self.is_dark_mode = True
+        self.palette = apply_style(dark=self.is_dark_mode)
         self.title(f"{APP_NAME} - {STYLE_NAME}")
         self.geometry("1550x900")
         self.minsize(1250, 720)
@@ -138,11 +139,25 @@ class App(ctk.CTk):
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
 
         self._build_ui()
         self._apply_read_only_ui()
         self._start_writer_heartbeat()
+
+    def toggle_theme(self) -> None:
+        """Cambia tra modalità dark e light."""
+        self.is_dark_mode = not self.is_dark_mode
+        self.palette = apply_style(dark=self.is_dark_mode)
+        configure_treeview_style(self, self.palette)
+        
+        # Distrugge i widget esistenti prima di ricostruire
+        for child in self.winfo_children():
+            child.destroy()
+        
+        # Ricostruisce l'interfaccia per applicare il nuovo tema
+        self._build_ui()
+        self._apply_read_only_ui()
 
     def _ask_login(self):
         dlg = RoleLoginDialog(self)
@@ -237,8 +252,20 @@ class App(ctk.CTk):
         self._writer_heartbeat_job = None
 
     def _build_ui(self) -> None:
+        # Frame superiore con pulsante tema
+        header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        header_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 0))
+        
+        theme_btn = ctk.CTkButton(
+            header_frame,
+            text="☀️ Light" if self.is_dark_mode else "🌙 Dark",
+            width=100,
+            command=self.toggle_theme
+        )
+        theme_btn.pack(side="right", padx=5)
+        
         self.main_tabs = ctk.CTkTabview(self)
-        self.main_tabs.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        self.main_tabs.grid(row=1, column=0, sticky="nsew", padx=10, pady=(5, 10))
 
         tab_normati = self.main_tabs.add("Commerciali Normati")
         tab_comm = self.main_tabs.add("Commerciali")
