@@ -71,14 +71,13 @@ class NormatiArticlesTab(ctk.CTkFrame):
         tree_wrap.grid_columnconfigure(0, weight=1)
         tree_wrap.grid_rowconfigure(0, weight=1)
 
-        self.tree = ttk.Treeview(tree_wrap, columns=("pref", "code", "cat", "sub", "desc", "upd"), show="headings", selectmode="browse")
+        self.tree = ttk.Treeview(tree_wrap, columns=("pref", "code", "cat", "sub", "desc"), show="headings", selectmode="browse")
         for col, title, w, anch in [
-            ("pref", "Pref", 50, "center"),
-            ("code", "Codice", 150, "w"),
-            ("cat", "Cat", 60, "center"),
-            ("sub", "Sub", 70, "center"),
-            ("desc", "Descrizione", 360, "w"),
-            ("upd", "Agg.", 120, "w"),
+            ("pref", "PREF", 50, "center"),
+            ("code", "CODICE", 170, "w"),
+            ("cat", "CAT", 70, "center"),
+            ("sub", "SUB", 80, "center"),
+            ("desc", "DESCRIZIONE", 420, "w"),
         ]:
             self.tree.heading(col, text=title)
             self.tree.column(col, width=w, anchor=anch)
@@ -257,7 +256,7 @@ class NormatiArticlesTab(ctk.CTkFrame):
             iid = str(r["id"])
             self._rows_by_iid[iid] = r
             pref = "X" if int(r["preferred"] or 0) else ""
-            self.tree.insert("", "end", iid=iid, values=(pref, r["code"], r["cat_code"], r["sub_code"], r["description"], r["updated_at"]))
+            self.tree.insert("", "end", iid=iid, values=(pref, r["code"], r["cat_code"], r["sub_code"], r["description"]))
 
     def new_item(self) -> None:
         self.current_item_id = None

@@ -212,6 +212,7 @@ class Database:
                 self._ensure_manual_v1003_entry()
                 self._ensure_manual_v1004_entry()
                 self._ensure_manual_v1005_entry()
+                self._ensure_manual_v1006_entry()
 
     def close(self) -> None:
         try:
@@ -1219,6 +1220,25 @@ class Database:
                 "v10.05",
                 "2026-02-23",
                 "TOOLING: SCRIPT TOOLS AGGIORNATI AI DB SPLIT E NUOVO COMANDO sync_split_databases.py.",
+                now_str(),
+                now_str(),
+            ),
+        )
+        if cur.rowcount > 0:
+            self.conn.commit()
+
+    def _ensure_manual_v1006_entry(self) -> None:
+        """Registra upgrade UI: logout sessione con nuovo login ruolo."""
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO manual_version(version, release_date, updates, created_at, updated_at)
+            VALUES(?, ?, ?, ?, ?)
+            """,
+            (
+                "v10.06",
+                "2026-02-23",
+                "UI: PULSANTE LOGOUT IN ALTO PER USCIRE E RIAPRIRE LOGIN CON NUOVO TIPO DI ACCESSO.",
                 now_str(),
                 now_str(),
             ),

@@ -148,94 +148,23 @@ class App(ctk.CTk):
         self.writer_scope = "MAIN"
         self._writer_heartbeat_job = None
         self._writer_heartbeat_seconds = max(5, int(WRITER_HEARTBEAT_SECONDS))
+        self.db = None
+        self.db_normati = None
+        self.db_commerciali = None
+        self.db_materiali = None
+        self.service = None
 
         ensure_dir(get_db_dir())
         ensure_dir(get_backup_dir())
         self._bootstrap_split_databases()
 
-        session = self._resolve_session_mode()
-        if session is None:
+        if not self._start_session():
             self.after(0, self.destroy)
             return
-        self.session_user = session["user"]
-        self.session_role = session["role"]
-        self.writer_scope = str(session.get("writer_scope") or "MAIN")
-        writer_token = session.get("writer_token")
-        writer_db_path = str(session.get("writer_db_path") or "")
-
-        mode_normati = "ro"
-        mode_commerciali = "ro"
-        mode_materiali = "ro"
-        if self.session_role == "editor":
-            if self.writer_scope == "NORMATI":
-                mode_normati = "rw"
-            elif self.writer_scope == "COMMERCIALI":
-                mode_commerciali = "rw"
-            elif self.writer_scope == "MATERIALI":
-                mode_materiali = "rw"
-
-        try:
-            self.db_normati = Database(
-                get_normati_db_path(),
-                db_profile="NORMATI",
-                access_mode=mode_normati,
-                session_role="editor" if mode_normati == "rw" else "reader",
-                writer_holder=self.session_user,
-                writer_lock_token=writer_token if writer_db_path and os.path.abspath(writer_db_path) == os.path.abspath(get_normati_db_path()) else None,
-                writer_lock_scope="MAIN",
-                writer_lock_timeout_seconds=WRITER_LOCK_TIMEOUT_SECONDS,
-            )
-            self.db_commerciali = Database(
-                get_commerciali_db_path(),
-                db_profile="COMMERCIALI",
-                access_mode=mode_commerciali,
-                session_role="editor" if mode_commerciali == "rw" else "reader",
-                writer_holder=self.session_user,
-                writer_lock_token=writer_token if writer_db_path and os.path.abspath(writer_db_path) == os.path.abspath(get_commerciali_db_path()) else None,
-                writer_lock_scope="MAIN",
-                writer_lock_timeout_seconds=WRITER_LOCK_TIMEOUT_SECONDS,
-            )
-            self.db_materiali = Database(
-                get_materiali_db_path(),
-                db_profile="MATERIALI",
-                access_mode=mode_materiali,
-                session_role="editor" if mode_materiali == "rw" else "reader",
-                writer_holder=self.session_user,
-                writer_lock_token=writer_token if writer_db_path and os.path.abspath(writer_db_path) == os.path.abspath(get_materiali_db_path()) else None,
-                writer_lock_scope="MAIN",
-                writer_lock_timeout_seconds=WRITER_LOCK_TIMEOUT_SECONDS,
-            )
-        except Exception as e:
-            messagebox.showerror("Avvio", f"Impossibile aprire il database: {e}", parent=self)
-            self.after(0, self.destroy)
-            return
-
-        if self.writer_scope == "COMMERCIALI":
-            self.db = self.db_commerciali
-        elif self.writer_scope == "MATERIALI":
-            self.db = self.db_materiali
-        else:
-            self.db = self.db_normati
-
-        self.service = AppService(
-            self.db_normati,
-            self.db_commerciali,
-            self.db_materiali,
-            editor_scope=self.writer_scope,
-        )
-        if self.session_role == "editor":
-            try:
-                self.service.create_periodic_backup("startup")
-            except Exception:
-                pass
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
-
-        self._build_ui()
-        self._apply_read_only_ui()
-        self._start_writer_heartbeat()
 
     def toggle_theme(self) -> None:
         """Cambia tra modalità dark e light."""
@@ -325,6 +254,153 @@ class App(ctk.CTk):
                     "writer_db_path": None,
                 }
 
+    def _start_session(self) -> bool:
+        session = self._resolve_session_mode()
+        if session is None:
+            return False
+        return self._apply_session(session)
+
+    def _apply_session(self, session: dict) -> bool:
+        self.session_user = str(session.get("user") or "")
+        self.session_role = str(session.get("role") or "reader")
+        self.writer_scope = str(session.get("writer_scope") or "MAIN")
+        writer_token = session.get("writer_token")
+        writer_db_path = str(session.get("writer_db_path") or "")
+
+        mode_normati = "ro"
+        mode_commerciali = "ro"
+        mode_materiali = "ro"
+        if self.session_role == "editor":
+            if self.writer_scope == "NORMATI":
+                mode_normati = "rw"
+            elif self.writer_scope == "COMMERCIALI":
+                mode_commerciali = "rw"
+            elif self.writer_scope == "MATERIALI":
+                mode_materiali = "rw"
+
+        db_normati = None
+        db_commerciali = None
+        db_materiali = None
+        try:
+            db_normati = Database(
+                get_normati_db_path(),
+                db_profile="NORMATI",
+                access_mode=mode_normati,
+                session_role="editor" if mode_normati == "rw" else "reader",
+                writer_holder=self.session_user,
+                writer_lock_token=writer_token if writer_db_path and os.path.abspath(writer_db_path) == os.path.abspath(get_normati_db_path()) else None,
+                writer_lock_scope="MAIN",
+                writer_lock_timeout_seconds=WRITER_LOCK_TIMEOUT_SECONDS,
+            )
+            db_commerciali = Database(
+                get_commerciali_db_path(),
+                db_profile="COMMERCIALI",
+                access_mode=mode_commerciali,
+                session_role="editor" if mode_commerciali == "rw" else "reader",
+                writer_holder=self.session_user,
+                writer_lock_token=writer_token if writer_db_path and os.path.abspath(writer_db_path) == os.path.abspath(get_commerciali_db_path()) else None,
+                writer_lock_scope="MAIN",
+                writer_lock_timeout_seconds=WRITER_LOCK_TIMEOUT_SECONDS,
+            )
+            db_materiali = Database(
+                get_materiali_db_path(),
+                db_profile="MATERIALI",
+                access_mode=mode_materiali,
+                session_role="editor" if mode_materiali == "rw" else "reader",
+                writer_holder=self.session_user,
+                writer_lock_token=writer_token if writer_db_path and os.path.abspath(writer_db_path) == os.path.abspath(get_materiali_db_path()) else None,
+                writer_lock_scope="MAIN",
+                writer_lock_timeout_seconds=WRITER_LOCK_TIMEOUT_SECONDS,
+            )
+        except Exception as e:
+            for db_obj in (db_normati, db_commerciali, db_materiali):
+                if db_obj is None:
+                    continue
+                try:
+                    db_obj.close()
+                except Exception:
+                    pass
+            messagebox.showerror("Avvio", f"Impossibile aprire il database: {e}", parent=self)
+            return False
+
+        self.db_normati = db_normati
+        self.db_commerciali = db_commerciali
+        self.db_materiali = db_materiali
+
+        if self.writer_scope == "COMMERCIALI":
+            self.db = self.db_commerciali
+        elif self.writer_scope == "MATERIALI":
+            self.db = self.db_materiali
+        else:
+            self.db = self.db_normati
+
+        self.service = AppService(
+            self.db_normati,
+            self.db_commerciali,
+            self.db_materiali,
+            editor_scope=self.writer_scope,
+        )
+
+        if self.session_role == "editor":
+            try:
+                self.service.create_periodic_backup("startup")
+            except Exception:
+                pass
+
+        self._clear_ui()
+        self._build_ui()
+        self._apply_read_only_ui()
+        self._start_writer_heartbeat()
+        return True
+
+    def _clear_ui(self) -> None:
+        for child in self.winfo_children():
+            child.destroy()
+
+    def _shutdown_session(self, backup_reason: str = "") -> None:
+        self._cancel_writer_heartbeat()
+        active_db = self.db
+        service = self.service
+
+        if backup_reason and active_db is not None and service is not None and not active_db.is_read_only:
+            try:
+                service.create_periodic_backup(backup_reason)
+            except Exception:
+                pass
+
+        if active_db is not None:
+            try:
+                active_db.release_writer_lock()
+            except Exception:
+                pass
+
+        if service is not None:
+            try:
+                service.close()
+            except Exception:
+                pass
+
+        self.db = None
+        self.db_normati = None
+        self.db_commerciali = None
+        self.db_materiali = None
+        self.service = None
+        self.session_user = ""
+        self.session_role = "reader"
+        self.writer_scope = "MAIN"
+
+    def logout(self) -> None:
+        if not messagebox.askyesno(
+            "Logout",
+            "Terminare la sessione corrente e tornare al login?",
+            parent=self,
+        ):
+            return
+        self._shutdown_session(backup_reason="close")
+        self._clear_ui()
+        if not self._start_session():
+            self.destroy()
+
     def _apply_read_only_ui(self) -> None:
         role_label = "READ-ONLY" if self.db.is_read_only else f"EDITOR:{_scope_label(self.writer_scope)}"
         self.title(f"{APP_NAME} - {STYLE_NAME} - {self.session_user} ({role_label})")
@@ -413,6 +489,16 @@ class App(ctk.CTk):
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
         header_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 0))
 
+        logout_btn = ctk.CTkButton(
+            header_frame,
+            text="Logout",
+            width=100,
+            fg_color="#ef4444",
+            hover_color="#dc2626",
+            command=self.logout,
+        )
+        logout_btn.pack(side="right", padx=5)
+
         theme_btn = ctk.CTkButton(
             header_frame,
             text="☀️ Light" if self.is_dark_mode else "🌙 Dark",
@@ -496,19 +582,7 @@ class App(ctk.CTk):
 
     def on_close(self) -> None:
         try:
-            self._cancel_writer_heartbeat()
-            if hasattr(self, "db") and not self.db.is_read_only:
-                try:
-                    self.service.create_periodic_backup("close")
-                except Exception:
-                    pass
-            if hasattr(self, "db"):
-                try:
-                    self.db.release_writer_lock()
-                except Exception:
-                    pass
-            if hasattr(self, "service"):
-                self.service.close()
+            self._shutdown_session(backup_reason="close")
         finally:
             self.destroy()
 
