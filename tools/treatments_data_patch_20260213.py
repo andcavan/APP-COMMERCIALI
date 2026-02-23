@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
@@ -16,7 +16,7 @@ from unificati_manager.db import Database
 from unificati_manager.utils import normalize_upper
 
 
-DB_PATH = ROOT / "unificati_manager" / "database" / "unificati_manager.db"
+DB_PATH = ROOT / "unificati_manager" / "database" / "materiali_semilavorati.db"
 BACKUP_DIR = ROOT / "unificati_manager" / "backups"
 
 
@@ -383,7 +383,7 @@ def upsert_treatments(cur, table: str, entries: List[TreatmentEntry]) -> Dict[st
 
 
 def run_patch(apply_changes: bool) -> int:
-    db = Database(str(DB_PATH))
+    db = Database(str(DB_PATH), db_profile="MATERIALI")
     try:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -423,3 +423,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 from datetime import datetime
@@ -15,7 +15,7 @@ from unificati_manager.db import Database
 from unificati_manager.utils import normalize_upper
 
 
-DB_PATH = ROOT / "unificati_manager" / "database" / "unificati_manager.db"
+DB_PATH = ROOT / "unificati_manager" / "database" / "materiali_semilavorati.db"
 BACKUP_DIR = ROOT / "unificati_manager" / "backups"
 
 
@@ -270,7 +270,7 @@ def trafilato_rows(db: Database, type_desc: str, material_id: Optional[int], dim
 
 
 def patch(apply_changes: bool) -> int:
-    db = Database(str(DB_PATH))
+    db = Database(str(DB_PATH), db_profile="MATERIALI")
     try:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
@@ -407,3 +407,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

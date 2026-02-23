@@ -21,8 +21,15 @@ pip install -r requirements.txt
 python app.py
 ```
 
+## Sync Legacy -> Split
+Per riallineare i 3 DB area-specifici partendo dal DB legacy unico:
+```bash
+python sync_split_databases.py
+```
+
 ## Struttura
-- `unificati_manager/database/` → contiene `unificati_manager.db` (creato al primo avvio)
+- `unificati_manager/database/` → contiene i DB area-specifici:
+- `commerciali_normati.db`, `commerciali.db`, `materiali_semilavorati.db` (con fallback legacy `unificati_manager.db`)
 - `unificati_manager/main_app.py` → costruzione GUI e tab principali
 - `unificati_manager/db.py` → schema + CRUD
 - `unificati_manager/ui_normati.py` → Commerciali Normati

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 from datetime import datetime
@@ -17,7 +17,7 @@ from unificati_manager.codifica import normalize_gggg_normati, normalize_mmm
 from unificati_manager.utils import normalize_upper
 
 
-DB_PATH = ROOT / "unificati_manager" / "database" / "unificati_manager.db"
+DB_PATH = ROOT / "unificati_manager" / "database" / "commerciali_normati.db"
 BACKUP_DIR = ROOT / "unificati_manager" / "backups"
 
 CATEGORY_CODE = "VIT"
@@ -62,7 +62,7 @@ def ensure_norm_before_m(text: str, norm_ref: str) -> str:
     if not s or not n:
         return s
 
-    # Rimuove eventuale norma già presente davanti al token M...
+    # Rimuove eventuale norma giÃ  presente davanti al token M...
     s = re.sub(
         r"\b(?:ISO|UNI|DIN)\s+[A-Z0-9./-]+\s+(?=M(?:__|\d+(?:[.,]\d+)?)X(?:__|\d+(?:[.,]\d+)?))",
         "",
@@ -137,7 +137,7 @@ def dedupe_sub_items(cur, category_id: int, sub_id: int) -> int:
 
 
 def patch(apply_changes: bool) -> int:
-    db = Database(str(DB_PATH))
+    db = Database(str(DB_PATH), db_profile="NORMATI")
     try:
         backup = backup_db(db)
         print(f"Backup: {backup}")
@@ -213,3 +213,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

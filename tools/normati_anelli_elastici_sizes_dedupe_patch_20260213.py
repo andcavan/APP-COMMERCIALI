@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
@@ -18,7 +18,7 @@ from unificati_manager.codifica import normalize_mmm, normalize_gggg_normati
 from unificati_manager.utils import normalize_upper
 
 
-DB_PATH = ROOT / "unificati_manager" / "database" / "unificati_manager.db"
+DB_PATH = ROOT / "unificati_manager" / "database" / "commerciali_normati.db"
 BACKUP_DIR = ROOT / "unificati_manager" / "backups"
 
 
@@ -465,7 +465,7 @@ def dedupe_sub_items(cur, category_id: int, subcategory_id: int) -> int:
 
 
 def patch(apply_changes: bool) -> int:
-    db = Database(str(DB_PATH))
+    db = Database(str(DB_PATH), db_profile="NORMATI")
     try:
         backup_path = backup_db(db)
         print(f"Backup: {backup_path}")
@@ -581,3 +581,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

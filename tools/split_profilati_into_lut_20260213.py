@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import sqlite3
@@ -8,7 +8,7 @@ from typing import Dict, List
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "unificati_manager" / "database" / "unificati_manager.db"
+DB_PATH = ROOT / "unificati_manager" / "database" / "materiali_semilavorati.db"
 BACKUP_DIR = ROOT / "unificati_manager" / "backups"
 
 
@@ -235,3 +235,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

@@ -4,8 +4,14 @@ import os
 
 APP_NAME = "Unificati Manager"
 
+# Legacy (DB unico storico)
 DB_FILENAME = "unificati_manager.db"
 DB_FOLDER = "database"
+
+# Nuova separazione fisica DB per area
+DB_NORMATI_FILENAME = "commerciali_normati.db"
+DB_COMMERCIALI_FILENAME = "commerciali.db"
+DB_MATERIALI_FILENAME = "materiali_semilavorati.db"
 
 BACKUP_FOLDER = "backups"
 BACKUP_FILE_PREFIX = "unificati_manager_backup"
@@ -37,6 +43,22 @@ def get_db_dir() -> str:
 
 def get_db_path() -> str:
     return os.path.join(get_db_dir(), DB_FILENAME)
+
+
+def get_legacy_db_path() -> str:
+    return get_db_path()
+
+
+def get_normati_db_path() -> str:
+    return os.path.join(get_db_dir(), DB_NORMATI_FILENAME)
+
+
+def get_commerciali_db_path() -> str:
+    return os.path.join(get_db_dir(), DB_COMMERCIALI_FILENAME)
+
+
+def get_materiali_db_path() -> str:
+    return os.path.join(get_db_dir(), DB_MATERIALI_FILENAME)
 
 
 def get_backup_dir() -> str:

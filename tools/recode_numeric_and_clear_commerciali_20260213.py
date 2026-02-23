@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 from datetime import datetime
@@ -9,7 +9,8 @@ from typing import Dict, Iterable, List, Tuple
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "unificati_manager" / "database" / "unificati_manager.db"
+DB_NORMATI_PATH = ROOT / "unificati_manager" / "database" / "commerciali_normati.db"
+DB_COMMERCIALI_PATH = ROOT / "unificati_manager" / "database" / "commerciali.db"
 BACKUP_DIR = ROOT / "unificati_manager" / "backups"
 
 
@@ -57,18 +58,25 @@ def now_stamp() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
-def backup_db() -> Path:
+def backup_db() -> List[Path]:
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    out = BACKUP_DIR / f"unificati_manager_backup_{now_stamp()}_recode_numeric_and_clear_commerciali.db"
-    src = sqlite3.connect(str(DB_PATH))
-    dst = sqlite3.connect(str(out))
-    try:
-        src.backup(dst)
-        dst.commit()
-    finally:
-        dst.close()
-        src.close()
-    return out
+    stamp = now_stamp()
+    outs: List[Path] = []
+    plan = [
+        (DB_NORMATI_PATH, BACKUP_DIR / f"unificati_manager_backup_{stamp}_recode_normati.db"),
+        (DB_COMMERCIALI_PATH, BACKUP_DIR / f"unificati_manager_backup_{stamp}_recode_commerciali.db"),
+    ]
+    for src_path, out in plan:
+        src = sqlite3.connect(str(src_path))
+        dst = sqlite3.connect(str(out))
+        try:
+            src.backup(dst)
+            dst.commit()
+        finally:
+            dst.close()
+            src.close()
+        outs.append(out)
+    return outs
 
 
 def _next_free_code(used: set[str], width: int, start: int) -> str:
@@ -202,13 +210,15 @@ def _rows_to_old_code_map(rows: Iterable[sqlite3.Row]) -> Dict[int, str]:
 
 
 def run(apply_changes: bool) -> int:
-    backup = backup_db()
-    print(f"Backup: {backup}")
+    backups = backup_db()
+    for b in backups:
+        print(f"Backup: {b}")
 
-    con = sqlite3.connect(str(DB_PATH))
+    con = sqlite3.connect(str(DB_NORMATI_PATH))
     con.row_factory = sqlite3.Row
     try:
         cur = con.cursor()
+        cur.execute("ATTACH DATABASE ? AS commdb", (str(DB_COMMERCIALI_PATH),))
         con.execute("BEGIN")
 
         # Snapshot old codes before recoding.
@@ -219,11 +229,11 @@ def run(apply_changes: bool) -> int:
         cur.execute("SELECT id, category_id, code FROM subcategory ORDER BY category_id, code, id")
         norm_sub_rows = cur.fetchall()
 
-        cur.execute("SELECT id, code FROM comm_category ORDER BY id")
+        cur.execute("SELECT id, code FROM commdb.comm_category ORDER BY id")
         comm_cat_rows = cur.fetchall()
         old_comm_cat_codes = _rows_to_old_code_map(comm_cat_rows)
 
-        cur.execute("SELECT id, category_id, code FROM comm_subcategory ORDER BY category_id, code, id")
+        cur.execute("SELECT id, category_id, code FROM commdb.comm_subcategory ORDER BY category_id, code, id")
         comm_sub_rows = cur.fetchall()
 
         norm_cat_targets = _assign_category_targets(
@@ -251,13 +261,13 @@ def run(apply_changes: bool) -> int:
         )
 
         # Delete all commercial items as requested.
-        cur.execute("DELETE FROM comm_item")
+        cur.execute("DELETE FROM commdb.comm_item")
         deleted_comm_items = int(cur.rowcount)
 
         _apply_temp_then_final(cur, "category", norm_cat_targets)
         _apply_temp_then_final(cur, "subcategory", norm_sub_targets)
-        _apply_temp_then_final(cur, "comm_category", comm_cat_targets)
-        _apply_temp_then_final(cur, "comm_subcategory", comm_sub_targets)
+        _apply_temp_then_final(cur, "commdb.comm_category", comm_cat_targets)
+        _apply_temp_then_final(cur, "commdb.comm_subcategory", comm_sub_targets)
         norm_items_rewritten, max_seq = _rewrite_normati_item_codes(cur)
 
         if apply_changes:
@@ -275,6 +285,10 @@ def run(apply_changes: bool) -> int:
         print(f"Max seq observed in normati items: {max_seq}")
         return 0
     finally:
+        try:
+            con.execute("DETACH DATABASE commdb")
+        except Exception:
+            pass
         con.close()
 
 
@@ -293,4 +307,5 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 

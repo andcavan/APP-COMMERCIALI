@@ -110,24 +110,80 @@ DEFAULT_MATERIAL_PROPERTY_ALIASES = [
     ("MECH", "RES_TRAZIONE", "CARICO DI ROTTURA RM"),
 ]
 
+WRITER_LOCK_SCOPE_MAIN = "MAIN"
+WRITER_LOCK_SCOPE_NORMATI = "NORMATI"
+WRITER_LOCK_SCOPE_COMMERCIALI = "COMMERCIALI"
+WRITER_LOCK_SCOPE_MATERIALI = "MATERIALI"
+WRITER_LOCK_SCOPES = (
+    WRITER_LOCK_SCOPE_MAIN,
+    WRITER_LOCK_SCOPE_NORMATI,
+    WRITER_LOCK_SCOPE_COMMERCIALI,
+    WRITER_LOCK_SCOPE_MATERIALI,
+)
+
+DB_PROFILE_ALL = "ALL"
+DB_PROFILE_NORMATI = "NORMATI"
+DB_PROFILE_COMMERCIALI = "COMMERCIALI"
+DB_PROFILE_MATERIALI = "MATERIALI"
+DB_PROFILES = (
+    DB_PROFILE_ALL,
+    DB_PROFILE_NORMATI,
+    DB_PROFILE_COMMERCIALI,
+    DB_PROFILE_MATERIALI,
+)
+
+NORMATI_TABLES = (
+    "category",
+    "standard",
+    "subcategory",
+    "item",
+    "manual_version",
+)
+COMMERCIALI_TABLES = (
+    "comm_category",
+    "comm_subcategory",
+    "supplier",
+    "comm_item",
+)
+MATERIALI_TABLES = (
+    "material",
+    "material_family",
+    "material_subfamily",
+    "material_property",
+    "heat_treatment",
+    "surface_treatment",
+    "semi_type",
+    "semi_state",
+    "semi_item",
+    "semi_item_dimension",
+)
+
 
 class Database:
     def __init__(
         self,
         path: str,
         *,
+        db_profile: str = DB_PROFILE_ALL,
         access_mode: str = "rw",
         session_role: str = "editor",
         writer_holder: str = "",
         writer_lock_token: Optional[str] = None,
+        writer_lock_scope: str = WRITER_LOCK_SCOPE_MAIN,
         writer_lock_timeout_seconds: int = 120,
     ) -> None:
         self.path = os.path.abspath(path)
+        self.db_profile = self._normalize_db_profile(db_profile)
+        self.has_normati = self.db_profile in {DB_PROFILE_ALL, DB_PROFILE_NORMATI}
+        self.has_commerciali = self.db_profile in {DB_PROFILE_ALL, DB_PROFILE_COMMERCIALI}
+        self.has_materiali = self.db_profile in {DB_PROFILE_ALL, DB_PROFILE_MATERIALI}
+        self.has_manual = self.db_profile in {DB_PROFILE_ALL, DB_PROFILE_NORMATI}
         self.access_mode = "ro" if (access_mode or "").strip().lower() == "ro" else "rw"
         self.is_read_only = self.access_mode == "ro"
         self.session_role = "reader" if self.is_read_only else ("reader" if (session_role or "").strip().lower() == "reader" else "editor")
         self.writer_holder = (writer_holder or "").strip()
         self.writer_lock_token = writer_lock_token
+        self.writer_lock_scope = self._normalize_writer_lock_scope(writer_lock_scope)
         self.writer_lock_timeout_seconds = max(15, int(writer_lock_timeout_seconds or 120))
 
         if self.is_read_only:
@@ -140,11 +196,22 @@ class Database:
         self.conn.execute("PRAGMA foreign_keys=ON;")
         self.conn.execute("PRAGMA busy_timeout=30000;")
         if not self.is_read_only:
+            # WAL riduce le attese tra letture/scritture concorrenti.
+            self.conn.execute("PRAGMA journal_mode=WAL;")
+            self.conn.execute("PRAGMA synchronous=NORMAL;")
+        if not self.is_read_only:
             self._init_schema()
             self._seed_defaults()
-            self._backfill_semi_dimensions_from_legacy_field()
-            self._normalize_semi_dimension_preferred_flags()
-            self._ensure_manual_v1000_entry()
+            if self.has_materiali:
+                self._backfill_semi_dimensions_from_legacy_field()
+                self._normalize_semi_dimension_preferred_flags()
+            if self.has_manual:
+                self._ensure_manual_v1000_entry()
+                self._ensure_manual_v1001_entry()
+                self._ensure_manual_v1002_entry()
+                self._ensure_manual_v1003_entry()
+                self._ensure_manual_v1004_entry()
+                self._ensure_manual_v1005_entry()
 
     def close(self) -> None:
         try:
@@ -168,6 +235,131 @@ class Database:
             dst.close()
 
     @staticmethod
+    def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,))
+        return cur.fetchone() is not None
+
+    @staticmethod
+    def _table_columns(conn: sqlite3.Connection, table: str) -> List[str]:
+        cur = conn.cursor()
+        cur.execute(f"PRAGMA table_info({table})")
+        return [str(r[1]) for r in cur.fetchall()]
+
+    @staticmethod
+    def _copy_tables_from_legacy(src_path: str, dst_path: str, tables: Tuple[str, ...]) -> None:
+        if not os.path.isfile(src_path):
+            return
+        dst_conn = sqlite3.connect(dst_path)
+        try:
+            dst_conn.execute("ATTACH DATABASE ? AS legacy", (os.path.abspath(src_path),))
+            dst_conn.execute("PRAGMA foreign_keys=OFF;")
+            for table in tables:
+                if not Database._table_exists(dst_conn, table):
+                    continue
+                legacy_exists = dst_conn.execute(
+                    "SELECT 1 FROM legacy.sqlite_master WHERE type='table' AND name=?",
+                    (table,),
+                ).fetchone()
+                if legacy_exists is None:
+                    continue
+                src_cols = [str(r[1]) for r in dst_conn.execute(f"PRAGMA legacy.table_info({table})").fetchall()]
+                dst_cols = Database._table_columns(dst_conn, table)
+                cols = [c for c in dst_cols if c in src_cols]
+                if not cols:
+                    continue
+                cols_csv = ", ".join(cols)
+                dst_conn.execute(f"DELETE FROM {table}")
+                dst_conn.execute(
+                    f"INSERT INTO {table}({cols_csv}) SELECT {cols_csv} FROM legacy.{table}"
+                )
+            dst_conn.commit()
+        finally:
+            try:
+                dst_conn.execute("PRAGMA foreign_keys=ON;")
+            except Exception:
+                pass
+            try:
+                dst_conn.execute("DETACH DATABASE legacy")
+            except Exception:
+                pass
+            dst_conn.close()
+
+    @staticmethod
+    def bootstrap_split_databases(
+        legacy_path: str,
+        normati_path: str,
+        commerciali_path: str,
+        materiali_path: str,
+    ) -> None:
+        targets = [
+            (normati_path, DB_PROFILE_NORMATI, NORMATI_TABLES),
+            (commerciali_path, DB_PROFILE_COMMERCIALI, COMMERCIALI_TABLES),
+            (materiali_path, DB_PROFILE_MATERIALI, MATERIALI_TABLES),
+        ]
+        if all(os.path.isfile(path) for path, _profile, _tables in targets):
+            return
+
+        legacy_abs = os.path.abspath(legacy_path or "")
+        for path, profile, tables in targets:
+            abs_path = os.path.abspath(path)
+            if os.path.isfile(abs_path):
+                continue
+            init_db = Database(
+                abs_path,
+                db_profile=profile,
+                access_mode="rw",
+                session_role="editor",
+                writer_lock_scope=WRITER_LOCK_SCOPE_MAIN,
+            )
+            init_db.close()
+            if os.path.isfile(legacy_abs):
+                Database._copy_tables_from_legacy(legacy_abs, abs_path, tables)
+                post_db = Database(
+                    abs_path,
+                    db_profile=profile,
+                    access_mode="rw",
+                    session_role="editor",
+                    writer_lock_scope=WRITER_LOCK_SCOPE_MAIN,
+                )
+                post_db.close()
+
+    @staticmethod
+    def resync_split_databases(
+        legacy_path: str,
+        normati_path: str,
+        commerciali_path: str,
+        materiali_path: str,
+    ) -> None:
+        legacy_abs = os.path.abspath(legacy_path or "")
+        if not os.path.isfile(legacy_abs):
+            raise FileNotFoundError(f"Legacy DB non trovato: {legacy_abs}")
+
+        targets = [
+            (os.path.abspath(normati_path), DB_PROFILE_NORMATI, NORMATI_TABLES),
+            (os.path.abspath(commerciali_path), DB_PROFILE_COMMERCIALI, COMMERCIALI_TABLES),
+            (os.path.abspath(materiali_path), DB_PROFILE_MATERIALI, MATERIALI_TABLES),
+        ]
+        for abs_path, profile, tables in targets:
+            init_db = Database(
+                abs_path,
+                db_profile=profile,
+                access_mode="rw",
+                session_role="editor",
+                writer_lock_scope=WRITER_LOCK_SCOPE_MAIN,
+            )
+            init_db.close()
+            Database._copy_tables_from_legacy(legacy_abs, abs_path, tables)
+            post_db = Database(
+                abs_path,
+                db_profile=profile,
+                access_mode="rw",
+                session_role="editor",
+                writer_lock_scope=WRITER_LOCK_SCOPE_MAIN,
+            )
+            post_db.close()
+
+    @staticmethod
     def _parse_lock_ts(text: str) -> Optional[datetime]:
         raw = (text or "").strip()
         if not raw:
@@ -176,6 +368,27 @@ class Database:
             return datetime.strptime(raw, DATE_FMT)
         except Exception:
             return None
+
+    @staticmethod
+    def _normalize_db_profile(db_profile: Optional[str]) -> str:
+        profile = normalize_upper(db_profile or DB_PROFILE_ALL)
+        if profile not in DB_PROFILES:
+            return DB_PROFILE_ALL
+        return profile
+
+    @staticmethod
+    def _normalize_writer_lock_scope(lock_scope: Optional[str]) -> str:
+        scope = normalize_upper(lock_scope or WRITER_LOCK_SCOPE_MAIN)
+        if scope not in WRITER_LOCK_SCOPES:
+            return WRITER_LOCK_SCOPE_MAIN
+        return scope
+
+    @staticmethod
+    def _lock_conflict_keys(lock_scope: str) -> Tuple[str, ...]:
+        scope = Database._normalize_writer_lock_scope(lock_scope)
+        if scope == WRITER_LOCK_SCOPE_MAIN:
+            return WRITER_LOCK_SCOPES
+        return (WRITER_LOCK_SCOPE_MAIN, scope)
 
     @staticmethod
     def _open_lock_connection(path: str) -> sqlite3.Connection:
@@ -203,49 +416,97 @@ class Database:
         conn.commit()
 
     @staticmethod
-    def try_acquire_writer_lock(path: str, holder: str, timeout_seconds: int = 120) -> Dict[str, Any]:
+    def try_acquire_writer_lock(
+        path: str,
+        holder: str,
+        timeout_seconds: int = 120,
+        lock_scope: str = WRITER_LOCK_SCOPE_MAIN,
+    ) -> Dict[str, Any]:
         timeout = max(15, int(timeout_seconds or 120))
+        scope = Database._normalize_writer_lock_scope(lock_scope)
         who = (holder or "").strip() or os.environ.get("USERNAME", "") or "EDITOR"
         token = uuid.uuid4().hex
         now_dt = datetime.now()
         now_val = now_dt.strftime(DATE_FMT)
+        conflict_keys = Database._lock_conflict_keys(scope)
         conn = Database._open_lock_connection(path)
         try:
             Database._ensure_writer_lock_table(conn)
             conn.execute("BEGIN IMMEDIATE")
             cur = conn.cursor()
-            cur.execute("SELECT holder, token, heartbeat_at FROM app_writer_lock WHERE lock_key='MAIN'")
-            row = cur.fetchone()
-            if row is None:
+            ph = ",".join("?" for _ in conflict_keys)
+            cur.execute(
+                f"SELECT lock_key, holder, token, heartbeat_at FROM app_writer_lock WHERE lock_key IN ({ph})",
+                tuple(conflict_keys),
+            )
+            rows = cur.fetchall()
+
+            live_rows: Dict[str, sqlite3.Row] = {}
+            stale_keys: List[str] = []
+            all_rows: Dict[str, sqlite3.Row] = {}
+            for row in rows:
+                key = Database._normalize_writer_lock_scope(str(row["lock_key"] or ""))
+                all_rows[key] = row
+                lock_hb = str(row["heartbeat_at"] or "")
+                hb_dt = Database._parse_lock_ts(lock_hb)
+                age = (now_dt - hb_dt).total_seconds() if hb_dt is not None else float("inf")
+                if age > float(timeout):
+                    stale_keys.append(key)
+                else:
+                    live_rows[key] = row
+
+            if stale_keys:
+                cur.executemany("DELETE FROM app_writer_lock WHERE lock_key=?", [(k,) for k in stale_keys])
+                for key in stale_keys:
+                    all_rows.pop(key, None)
+                    live_rows.pop(key, None)
+
+            for key in conflict_keys:
+                if key == scope:
+                    continue
+                conflict_row = live_rows.get(key)
+                if conflict_row is not None:
+                    conn.rollback()
+                    return {
+                        "acquired": False,
+                        "holder": str(conflict_row["holder"] or ""),
+                        "token": None,
+                        "heartbeat_at": str(conflict_row["heartbeat_at"] or ""),
+                        "lock_scope": key,
+                    }
+
+            own_live = live_rows.get(scope)
+            if own_live is not None:
+                conn.rollback()
+                return {
+                    "acquired": False,
+                    "holder": str(own_live["holder"] or ""),
+                    "token": None,
+                    "heartbeat_at": str(own_live["heartbeat_at"] or ""),
+                    "lock_scope": scope,
+                }
+
+            if scope not in all_rows:
                 cur.execute(
                     """
                     INSERT INTO app_writer_lock(lock_key, holder, token, acquired_at, heartbeat_at)
-                    VALUES('MAIN', ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?)
                     """,
-                    (who, token, now_val, now_val),
+                    (scope, who, token, now_val, now_val),
                 )
                 conn.commit()
-                return {"acquired": True, "holder": who, "token": token, "heartbeat_at": now_val}
+                return {"acquired": True, "holder": who, "token": token, "heartbeat_at": now_val, "lock_scope": scope}
 
-            lock_holder = str(row["holder"] or "")
-            lock_hb = str(row["heartbeat_at"] or "")
-            hb_dt = Database._parse_lock_ts(lock_hb)
-            age = (now_dt - hb_dt).total_seconds() if hb_dt is not None else float("inf")
-            is_expired = age > float(timeout)
-            if is_expired:
-                cur.execute(
-                    """
-                    UPDATE app_writer_lock
-                    SET holder=?, token=?, acquired_at=?, heartbeat_at=?
-                    WHERE lock_key='MAIN'
-                    """,
-                    (who, token, now_val, now_val),
-                )
-                conn.commit()
-                return {"acquired": True, "holder": who, "token": token, "heartbeat_at": now_val}
-
-            conn.rollback()
-            return {"acquired": False, "holder": lock_holder, "token": None, "heartbeat_at": lock_hb}
+            cur.execute(
+                """
+                UPDATE app_writer_lock
+                SET holder=?, token=?, acquired_at=?, heartbeat_at=?
+                WHERE lock_key=?
+                """,
+                (who, token, now_val, now_val, scope),
+            )
+            conn.commit()
+            return {"acquired": True, "holder": who, "token": token, "heartbeat_at": now_val, "lock_scope": scope}
         except Exception:
             try:
                 conn.rollback()
@@ -256,15 +517,16 @@ class Database:
             conn.close()
 
     @staticmethod
-    def release_writer_lock_static(path: str, token: str) -> bool:
+    def release_writer_lock_static(path: str, token: str, lock_scope: str = WRITER_LOCK_SCOPE_MAIN) -> bool:
         tok = (token or "").strip()
         if not tok:
             return False
+        scope = Database._normalize_writer_lock_scope(lock_scope)
         conn = Database._open_lock_connection(path)
         try:
             Database._ensure_writer_lock_table(conn)
             cur = conn.cursor()
-            cur.execute("DELETE FROM app_writer_lock WHERE lock_key='MAIN' AND token=?", (tok,))
+            cur.execute("DELETE FROM app_writer_lock WHERE lock_key=? AND token=?", (scope, tok))
             conn.commit()
             return cur.rowcount > 0
         finally:
@@ -281,9 +543,9 @@ class Database:
             """
             UPDATE app_writer_lock
             SET heartbeat_at=?
-            WHERE lock_key='MAIN' AND token=?
+            WHERE lock_key=? AND token=?
             """,
-            (now_str(), tok),
+            (now_str(), self.writer_lock_scope, tok),
         )
         self.conn.commit()
         return cur.rowcount > 0
@@ -295,7 +557,7 @@ class Database:
         if not tok:
             return False
         cur = self.conn.cursor()
-        cur.execute("DELETE FROM app_writer_lock WHERE lock_key='MAIN' AND token=?", (tok,))
+        cur.execute("DELETE FROM app_writer_lock WHERE lock_key=? AND token=?", (self.writer_lock_scope, tok))
         self.conn.commit()
         return cur.rowcount > 0
 
@@ -313,285 +575,289 @@ class Database:
     def _init_schema(self) -> None:
         cur = self.conn.cursor()
 
-        # Normati
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS category (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL UNIQUE,
-                description TEXT NOT NULL
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS standard (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                category_id INTEGER NOT NULL,
-                code TEXT NOT NULL,
-                description TEXT NOT NULL,
-                UNIQUE(category_id, code),
-                FOREIGN KEY(category_id) REFERENCES category(id)
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS subcategory (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                category_id INTEGER NOT NULL,
-                code TEXT NOT NULL,
-                description TEXT NOT NULL,
-                standard_id INTEGER,
-                desc_template TEXT NOT NULL DEFAULT '',
-                UNIQUE(category_id, code),
-                FOREIGN KEY(category_id) REFERENCES category(id),
-                FOREIGN KEY(standard_id) REFERENCES standard(id)
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS item (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL UNIQUE,
-                category_id INTEGER NOT NULL,
-                subcategory_id INTEGER NOT NULL,
-                standard_id INTEGER,
-                seq INTEGER NOT NULL,
-                description TEXT NOT NULL,
-                notes TEXT,
-                preferred INTEGER NOT NULL DEFAULT 0,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY(category_id) REFERENCES category(id),
-                FOREIGN KEY(subcategory_id) REFERENCES subcategory(id),
-                FOREIGN KEY(standard_id) REFERENCES standard(id)
-            );
-            """
-        )
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_item_cat_sub ON item(category_id, subcategory_id)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_item_code ON item(code)")
+        if self.has_normati:
+            # Normati
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS category (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT NOT NULL UNIQUE,
+                    description TEXT NOT NULL
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS standard (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category_id INTEGER NOT NULL,
+                    code TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    UNIQUE(category_id, code),
+                    FOREIGN KEY(category_id) REFERENCES category(id)
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS subcategory (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category_id INTEGER NOT NULL,
+                    code TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    standard_id INTEGER,
+                    desc_template TEXT NOT NULL DEFAULT '',
+                    UNIQUE(category_id, code),
+                    FOREIGN KEY(category_id) REFERENCES category(id),
+                    FOREIGN KEY(standard_id) REFERENCES standard(id)
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS item (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT NOT NULL UNIQUE,
+                    category_id INTEGER NOT NULL,
+                    subcategory_id INTEGER NOT NULL,
+                    standard_id INTEGER,
+                    seq INTEGER NOT NULL,
+                    description TEXT NOT NULL,
+                    notes TEXT,
+                    preferred INTEGER NOT NULL DEFAULT 0,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(category_id) REFERENCES category(id),
+                    FOREIGN KEY(subcategory_id) REFERENCES subcategory(id),
+                    FOREIGN KEY(standard_id) REFERENCES standard(id)
+                );
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_item_cat_sub ON item(category_id, subcategory_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_item_code ON item(code)")
 
-        # Commerciali non normati
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS comm_category (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL UNIQUE,
-                description TEXT NOT NULL
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS comm_subcategory (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                category_id INTEGER NOT NULL,
-                code TEXT NOT NULL,
-                description TEXT NOT NULL,
-                UNIQUE(category_id, code),
-                FOREIGN KEY(category_id) REFERENCES comm_category(id)
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS supplier (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL UNIQUE,
-                description TEXT NOT NULL
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS comm_item (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL UNIQUE,
-                category_id INTEGER NOT NULL,
-                subcategory_id INTEGER NOT NULL,
-                supplier_id INTEGER,
-                seq INTEGER NOT NULL,
-                description TEXT NOT NULL,
-                supplier_item_code TEXT,
-                supplier_item_desc TEXT,
-                file_folder TEXT,
-                notes TEXT,
-                preferred INTEGER NOT NULL DEFAULT 0,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY(category_id) REFERENCES comm_category(id),
-                FOREIGN KEY(subcategory_id) REFERENCES comm_subcategory(id),
-                FOREIGN KEY(supplier_id) REFERENCES supplier(id)
-            );
-            """
-        )
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_comm_item_cat_sub ON comm_item(category_id, subcategory_id)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_comm_item_code ON comm_item(code)")
+        if self.has_commerciali:
+            # Commerciali non normati
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS comm_category (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT NOT NULL UNIQUE,
+                    description TEXT NOT NULL
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS comm_subcategory (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category_id INTEGER NOT NULL,
+                    code TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    UNIQUE(category_id, code),
+                    FOREIGN KEY(category_id) REFERENCES comm_category(id)
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS supplier (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT NOT NULL UNIQUE,
+                    description TEXT NOT NULL
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS comm_item (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT NOT NULL UNIQUE,
+                    category_id INTEGER NOT NULL,
+                    subcategory_id INTEGER NOT NULL,
+                    supplier_id INTEGER,
+                    seq INTEGER NOT NULL,
+                    description TEXT NOT NULL,
+                    supplier_item_code TEXT,
+                    supplier_item_desc TEXT,
+                    file_folder TEXT,
+                    notes TEXT,
+                    preferred INTEGER NOT NULL DEFAULT 0,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(category_id) REFERENCES comm_category(id),
+                    FOREIGN KEY(subcategory_id) REFERENCES comm_subcategory(id),
+                    FOREIGN KEY(supplier_id) REFERENCES supplier(id)
+                );
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_comm_item_cat_sub ON comm_item(category_id, subcategory_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_comm_item_code ON comm_item(code)")
 
+        if self.has_materiali:
+            # Materiali / Trattamenti / Semilavorati
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS material (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT NOT NULL UNIQUE,
+                    family TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    standard TEXT,
+                    notes TEXT,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS material_family (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    description TEXT NOT NULL UNIQUE
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS material_subfamily (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    family_id INTEGER NOT NULL,
+                    description TEXT NOT NULL,
+                    UNIQUE(family_id, description),
+                    FOREIGN KEY(family_id) REFERENCES material_family(id)
+                );
+                """
+            )
 
-        # Materiali / Trattamenti / Semilavorati
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS material (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL UNIQUE,
-                family TEXT NOT NULL,
-                description TEXT NOT NULL,
-                standard TEXT,
-                notes TEXT,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS material_family (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                description TEXT NOT NULL UNIQUE
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS material_subfamily (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                family_id INTEGER NOT NULL,
-                description TEXT NOT NULL,
-                UNIQUE(family_id, description),
-                FOREIGN KEY(family_id) REFERENCES material_family(id)
-            );
-            """
-        )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS material_property (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    material_id INTEGER NOT NULL,
+                    prop_group TEXT NOT NULL,         -- CHEM / PHYS / MECH
+                    state_code TEXT NOT NULL DEFAULT '',  -- '' = generale, altrimenti codice stato (4 lettere)
+                    name TEXT NOT NULL,
+                    unit TEXT,
+                    value TEXT,
+                    min_value TEXT,
+                    max_value TEXT,
+                    notes TEXT,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(material_id, prop_group, name, state_code),
+                    FOREIGN KEY(material_id) REFERENCES material(id)
+                );
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_material_code ON material(code)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_material_prop_mid ON material_property(material_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_material_prop_grp ON material_property(material_id, prop_group)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_material_subfamily_family ON material_subfamily(family_id)")
 
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS material_property (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                material_id INTEGER NOT NULL,
-                prop_group TEXT NOT NULL,         -- CHEM / PHYS / MECH
-                state_code TEXT NOT NULL DEFAULT '',  -- '' = generale, altrimenti codice stato (4 lettere)
-                name TEXT NOT NULL,
-                unit TEXT,
-                value TEXT,
-                min_value TEXT,
-                max_value TEXT,
-                notes TEXT,
-                sort_order INTEGER NOT NULL DEFAULT 0,
-                UNIQUE(material_id, prop_group, name, state_code),
-                FOREIGN KEY(material_id) REFERENCES material(id)
-            );
-            """
-        )
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_material_code ON material(code)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_material_prop_mid ON material_property(material_id)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_material_prop_grp ON material_property(material_id, prop_group)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_material_subfamily_family ON material_subfamily(family_id)")
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS heat_treatment (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT NOT NULL UNIQUE,
+                    description TEXT NOT NULL,
+                    characteristics TEXT,
+                    standard TEXT,
+                    notes TEXT,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS surface_treatment (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT NOT NULL UNIQUE,
+                    description TEXT NOT NULL,
+                    characteristics TEXT,
+                    standard TEXT,
+                    notes TEXT,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """
+            )
 
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS heat_treatment (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL UNIQUE,
-                description TEXT NOT NULL,
-                characteristics TEXT,
-                standard TEXT,
-                notes TEXT,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS surface_treatment (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL UNIQUE,
-                description TEXT NOT NULL,
-                characteristics TEXT,
-                standard TEXT,
-                notes TEXT,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            """
-        )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS semi_type (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT NOT NULL UNIQUE,
+                    description TEXT NOT NULL
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS semi_state (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    code TEXT NOT NULL UNIQUE,
+                    description TEXT NOT NULL
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS semi_item (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    type_id INTEGER NOT NULL,
+                    state_id INTEGER NOT NULL,
+                    material_id INTEGER,
+                    description TEXT NOT NULL,
+                    dimensions TEXT,
+                    standard TEXT,
+                    notes TEXT,
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(type_id) REFERENCES semi_type(id),
+                    FOREIGN KEY(state_id) REFERENCES semi_state(id),
+                    FOREIGN KEY(material_id) REFERENCES material(id)
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS semi_item_dimension (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    semi_item_id INTEGER NOT NULL,
+                    dimension TEXT NOT NULL,
+                    weight_per_m TEXT,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    preferred INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(semi_item_id, dimension),
+                    FOREIGN KEY(semi_item_id) REFERENCES semi_item(id) ON DELETE CASCADE
+                );
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_semi_item_ts ON semi_item(type_id, state_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_semi_item_mat ON semi_item(material_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_semi_dim_item ON semi_item_dimension(semi_item_id)")
 
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS semi_type (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL UNIQUE,
-                description TEXT NOT NULL
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS semi_state (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                code TEXT NOT NULL UNIQUE,
-                description TEXT NOT NULL
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS semi_item (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                type_id INTEGER NOT NULL,
-                state_id INTEGER NOT NULL,
-                material_id INTEGER,
-                description TEXT NOT NULL,
-                dimensions TEXT,
-                standard TEXT,
-                notes TEXT,
-                is_active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY(type_id) REFERENCES semi_type(id),
-                FOREIGN KEY(state_id) REFERENCES semi_state(id),
-                FOREIGN KEY(material_id) REFERENCES material(id)
-            );
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS semi_item_dimension (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                semi_item_id INTEGER NOT NULL,
-                dimension TEXT NOT NULL,
-                weight_per_m TEXT,
-                sort_order INTEGER NOT NULL DEFAULT 0,
-                preferred INTEGER NOT NULL DEFAULT 0,
-                UNIQUE(semi_item_id, dimension),
-                FOREIGN KEY(semi_item_id) REFERENCES semi_item(id) ON DELETE CASCADE
-            );
-            """
-        )
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_semi_item_ts ON semi_item(type_id, state_id)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_semi_item_mat ON semi_item(material_id)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_semi_dim_item ON semi_item_dimension(semi_item_id)")
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS manual_version (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                version TEXT NOT NULL UNIQUE,
-                release_date TEXT NOT NULL,
-                updates TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            """
-        )
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_manual_version_release_date ON manual_version(release_date)")
+        if self.has_manual:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS manual_version (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    version TEXT NOT NULL UNIQUE,
+                    release_date TEXT NOT NULL,
+                    updates TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_manual_version_release_date ON manual_version(release_date)")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS app_writer_lock (
@@ -607,30 +873,33 @@ class Database:
         self.conn.commit()
 
         # migrations for older DBs
-        self._ensure_column("subcategory", "desc_template", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("comm_item", "supplier_item_code", "TEXT")
-        self._ensure_column("comm_item", "supplier_item_desc", "TEXT")
-        self._ensure_column("item", "preferred", "INTEGER NOT NULL DEFAULT 0")
-        self._ensure_column("comm_item", "preferred", "INTEGER NOT NULL DEFAULT 0")
-        self._ensure_column("material_property", "state_code", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column("semi_item", "material_id", "INTEGER")
-        self._ensure_column("semi_item_dimension", "preferred", "INTEGER NOT NULL DEFAULT 0")
-        try:
-            self.conn.execute(
-                """
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_semi_dim_one_pref
-                ON semi_item_dimension(semi_item_id)
-                WHERE preferred=1
-                """
-            )
-            self.conn.commit()
-        except sqlite3.OperationalError:
-            pass
+        if self.has_normati:
+            self._ensure_column("subcategory", "desc_template", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("item", "preferred", "INTEGER NOT NULL DEFAULT 0")
+        if self.has_commerciali:
+            self._ensure_column("comm_item", "supplier_item_code", "TEXT")
+            self._ensure_column("comm_item", "supplier_item_desc", "TEXT")
+            self._ensure_column("comm_item", "preferred", "INTEGER NOT NULL DEFAULT 0")
+        if self.has_materiali:
+            self._ensure_column("material_property", "state_code", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column("semi_item", "material_id", "INTEGER")
+            self._ensure_column("semi_item_dimension", "preferred", "INTEGER NOT NULL DEFAULT 0")
+            try:
+                self.conn.execute(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_semi_dim_one_pref
+                    ON semi_item_dimension(semi_item_id)
+                    WHERE preferred=1
+                    """
+                )
+                self.conn.commit()
+            except sqlite3.OperationalError:
+                pass
 
     def _seed_defaults(self) -> None:
         cur = self.conn.cursor()
 
-        if SEED_NORMATI_DEFAULTS:
+        if self.has_normati and SEED_NORMATI_DEFAULTS:
             # Normati
             for desc, mmm in DEFAULT_NORMATI_CATEGORIES:
                 cur.execute("INSERT OR IGNORE INTO category(code, description) VALUES(?, ?)", (mmm, normalize_upper(desc)))
@@ -662,7 +931,7 @@ class Database:
                 )
             self.conn.commit()
 
-        if SEED_COMMERCIALI_DEFAULTS:
+        if self.has_commerciali and SEED_COMMERCIALI_DEFAULTS:
             # Commerciali
             for desc, code in DEFAULT_COMM_CATEGORIES:
                 cur.execute("INSERT OR IGNORE INTO comm_category(code, description) VALUES(?, ?)", (normalize_cccc(code), normalize_upper(desc)))
@@ -680,59 +949,60 @@ class Database:
                     )
             self.conn.commit()
 
-        if SEED_SUPPLIERS_DEFAULTS:
+        if self.has_commerciali and SEED_SUPPLIERS_DEFAULTS:
             for code, desc in DEFAULT_SUPPLIERS:
                 cur.execute("INSERT OR IGNORE INTO supplier(code, description) VALUES(?, ?)", (normalize_upper(code), normalize_upper(desc)))
             self.conn.commit()
 
 
-        # Semilavorati: tipi e stati (esempi iniziali, modificabili)
-        semi_types = [
-            ("PIAT", "PIATTI"),
-            ("TOND", "TONDI"),
-            ("ESAG", "ESAGONI"),
-            ("TUBO", "TUBI"),
-            ("TUBL", "TUBOLARI"),
-            ("LAMI", "LAMIERE"),
-            ("TRAV", "TRAVI"),
-            ("TVIP", "TRAVE IPE"),
-            ("TVHE", "TRAVE HE"),
-            ("TVHA", "TRAVE HEA"),
-            ("TVHB", "TRAVE HEB"),
-            ("TVHM", "TRAVE HEM"),
-            ("TVUN", "TRAVE UPN"),
-            ("TVUE", "TRAVE UPE"),
-            ("TVUS", "TRAVE UPS"),
-            ("PROF", "PROFILATI"),
-            ("PRFL", "PROFILO L"),
-            ("PRFU", "PROFILO U"),
-            ("PRFT", "PROFILO T"),
-            ("PLTR", "PROFILO L TRAFILATO"),
-            ("PUTR", "PROFILO U TRAFILATO"),
-            ("PTTR", "PROFILO T TRAFILATO"),
-        ]
-        for code, desc in semi_types:
-            cur.execute(
-                "INSERT OR IGNORE INTO semi_type(code, description) VALUES(?, ?)",
-                (normalize_upper(code), normalize_upper(desc)),
-            )
+        if self.has_materiali:
+            # Semilavorati: tipi e stati (esempi iniziali, modificabili)
+            semi_types = [
+                ("PIAT", "PIATTI"),
+                ("TOND", "TONDI"),
+                ("ESAG", "ESAGONI"),
+                ("TUBO", "TUBI"),
+                ("TUBL", "TUBOLARI"),
+                ("LAMI", "LAMIERE"),
+                ("TRAV", "TRAVI"),
+                ("TVIP", "TRAVE IPE"),
+                ("TVHE", "TRAVE HE"),
+                ("TVHA", "TRAVE HEA"),
+                ("TVHB", "TRAVE HEB"),
+                ("TVHM", "TRAVE HEM"),
+                ("TVUN", "TRAVE UPN"),
+                ("TVUE", "TRAVE UPE"),
+                ("TVUS", "TRAVE UPS"),
+                ("PROF", "PROFILATI"),
+                ("PRFL", "PROFILO L"),
+                ("PRFU", "PROFILO U"),
+                ("PRFT", "PROFILO T"),
+                ("PLTR", "PROFILO L TRAFILATO"),
+                ("PUTR", "PROFILO U TRAFILATO"),
+                ("PTTR", "PROFILO T TRAFILATO"),
+            ]
+            for code, desc in semi_types:
+                cur.execute(
+                    "INSERT OR IGNORE INTO semi_type(code, description) VALUES(?, ?)",
+                    (normalize_upper(code), normalize_upper(desc)),
+                )
 
-        semi_states = [
-            ("LAMI", "LAMINATO"),
-            ("TRAF", "TRAFILATO"),
-            ("ESTR", "ESTRUSO"),
-            ("RETT", "RETTIFICATO"),
-            ("BONI", "BONIFICATO"),
-            ("RIC0", "RICOTTO"),
-        ]
-        for code, desc in semi_states:
-            cur.execute(
-                "INSERT OR IGNORE INTO semi_state(code, description) VALUES(?, ?)",
-                (normalize_upper(code), normalize_upper(desc)),
-            )
-        self.conn.commit()
-        self._seed_material_taxonomy_from_materials()
-        self.ensure_default_material_properties_all()
+            semi_states = [
+                ("LAMI", "LAMINATO"),
+                ("TRAF", "TRAFILATO"),
+                ("ESTR", "ESTRUSO"),
+                ("RETT", "RETTIFICATO"),
+                ("BONI", "BONIFICATO"),
+                ("RIC0", "RICOTTO"),
+            ]
+            for code, desc in semi_states:
+                cur.execute(
+                    "INSERT OR IGNORE INTO semi_state(code, description) VALUES(?, ?)",
+                    (normalize_upper(code), normalize_upper(desc)),
+                )
+            self.conn.commit()
+            self._seed_material_taxonomy_from_materials()
+            self.ensure_default_material_properties_all()
 
     def _seed_material_taxonomy_from_materials(self) -> None:
         """Populate family/subfamily master tables from existing materials."""
@@ -854,6 +1124,101 @@ class Database:
                 "v10.00",
                 "2026-02-14",
                 "BASELINE V10.00: TAB SEMILAVORATI CON PREFERITO LIVELLO DIMENSIONALE E COLONNA PREF IN LISTA.",
+                now_str(),
+                now_str(),
+            ),
+        )
+        if cur.rowcount > 0:
+            self.conn.commit()
+
+    def _ensure_manual_v1001_entry(self) -> None:
+        """Registra upgrade lock per area e WAL."""
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO manual_version(version, release_date, updates, created_at, updated_at)
+            VALUES(?, ?, ?, ?, ?)
+            """,
+            (
+                "v10.01",
+                "2026-02-23",
+                "CONCORRENZA TEAM: LOCK WRITER PER AREA (NORMATI/COMMERCIALI/MATERIALI-SEMILAVORATI) E SQLITE WAL.",
+                now_str(),
+                now_str(),
+            ),
+        )
+        if cur.rowcount > 0:
+            self.conn.commit()
+
+    def _ensure_manual_v1002_entry(self) -> None:
+        """Registra upgrade UI: blocco scritture fuori area editor."""
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO manual_version(version, release_date, updates, created_at, updated_at)
+            VALUES(?, ?, ?, ?, ?)
+            """,
+            (
+                "v10.02",
+                "2026-02-23",
+                "CONCORRENZA TEAM: BLOCCO UI OPERAZIONI DI SCRITTURA NELLE AREE NON ASSEGNATE ALLO SCOPE EDITOR.",
+                now_str(),
+                now_str(),
+            ),
+        )
+        if cur.rowcount > 0:
+            self.conn.commit()
+
+    def _ensure_manual_v1003_entry(self) -> None:
+        """Registra upgrade UI: nasconde tab fuori area editor."""
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO manual_version(version, release_date, updates, created_at, updated_at)
+            VALUES(?, ?, ?, ?, ?)
+            """,
+            (
+                "v10.03",
+                "2026-02-23",
+                "CONCORRENZA TEAM: TAB FUORI AREA EDITOR NASCOSTE (MANUALE SEMPRE VISIBILE).",
+                now_str(),
+                now_str(),
+            ),
+        )
+        if cur.rowcount > 0:
+            self.conn.commit()
+
+    def _ensure_manual_v1004_entry(self) -> None:
+        """Registra upgrade: split fisico database in 3 file area-specific."""
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO manual_version(version, release_date, updates, created_at, updated_at)
+            VALUES(?, ?, ?, ?, ?)
+            """,
+            (
+                "v10.04",
+                "2026-02-23",
+                "CONCORRENZA TEAM: SPLIT FISICO DB IN 3 FILE (NORMATI, COMMERCIALI, MATERIALI-SEMILAVORATI).",
+                now_str(),
+                now_str(),
+            ),
+        )
+        if cur.rowcount > 0:
+            self.conn.commit()
+
+    def _ensure_manual_v1005_entry(self) -> None:
+        """Registra upgrade: tooling scripts su DB split + comando re-sync."""
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            INSERT OR IGNORE INTO manual_version(version, release_date, updates, created_at, updated_at)
+            VALUES(?, ?, ?, ?, ?)
+            """,
+            (
+                "v10.05",
+                "2026-02-23",
+                "TOOLING: SCRIPT TOOLS AGGIORNATI AI DB SPLIT E NUOVO COMANDO sync_split_databases.py.",
                 now_str(),
                 now_str(),
             ),
