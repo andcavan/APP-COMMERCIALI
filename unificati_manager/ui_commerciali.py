@@ -844,7 +844,3 @@ class CommercialCodingTab(ctk.CTkFrame):
             messagebox.showerror(APP_NAME, "Impossibile eliminare: ci sono record collegati.")
         except Exception as e:
             messagebox.showerror(APP_NAME, f"Errore.\n\n{e}")
-
-
-
-

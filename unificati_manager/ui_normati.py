@@ -815,6 +815,3 @@ class NormatiCodingTab(ctk.CTkFrame):
 
 
 # ---------------- UI Commerciali (non normati) ----------------
-
-
-

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import math
 import os
@@ -1487,8 +1487,8 @@ class Database:
 
 
     # -------- Materiali / Trattamenti / Semilavorati --------
-    
-    
+
+
     # -------- Materiali --------
     def fetch_material_families(self):
         cur = self.conn.cursor()
@@ -1634,7 +1634,7 @@ class Database:
         else:
             cur.execute("SELECT id, code, family, description, updated_at FROM material ORDER BY updated_at DESC")
         return cur.fetchall()
-    
+
     def read_material(self, material_id: int):
         cur = self.conn.cursor()
         cur.execute("SELECT * FROM material WHERE id=?", (int(material_id),))
@@ -1642,7 +1642,7 @@ class Database:
         if row is None:
             raise ValueError("Materiale non trovato")
         return row
-    
+
     def create_material(self, code: Optional[str], family: str, description: str, standard: str, notes: str) -> int:
         code = normalize_upper(code) if (code or "").strip() else self._auto_code("MAT")
         self.ensure_material_taxonomy_entry(family, description)
@@ -1655,7 +1655,7 @@ class Database:
         self._ensure_default_material_properties_with_cursor(cur, new_id)
         self.conn.commit()
         return new_id
-    
+
     def update_material(self, material_id: int, family: str, description: str, standard: str, notes: str) -> None:
         self.ensure_material_taxonomy_entry(family, description)
         cur = self.conn.cursor()
@@ -1664,12 +1664,12 @@ class Database:
             (normalize_upper(family), normalize_upper(description), normalize_upper(standard), normalize_upper(notes), now_str(), int(material_id)),
         )
         self.conn.commit()
-    
+
     def delete_material(self, material_id: int) -> None:
         cur = self.conn.cursor()
         cur.execute("DELETE FROM material WHERE id=?", (int(material_id),))
         self.conn.commit()
-    
+
     def fetch_material_properties(self, material_id: int, prop_group: str):
         cur = self.conn.cursor()
         cur.execute(
@@ -1688,7 +1688,7 @@ class Database:
         cur.execute("SELECT notes FROM material_property WHERE id=?", (int(prop_id),))
         row = cur.fetchone()
         return "" if row is None else str(row["notes"] or "")
-    
+
     def create_material_property(
         self,
         material_id: int,
@@ -1723,7 +1723,7 @@ class Database:
         )
         self.conn.commit()
         return int(cur.lastrowid)
-    
+
     def update_material_property(
         self,
         prop_id: int,
@@ -1754,23 +1754,23 @@ class Database:
             ),
         )
         self.conn.commit()
-    
+
     def delete_material_property(self, prop_id: int) -> None:
         cur = self.conn.cursor()
         cur.execute("DELETE FROM material_property WHERE id=?", (int(prop_id),))
         self.conn.commit()
-    
+
     # -------- Trattamenti --------
     def fetch_heat_treatments(self):
         cur = self.conn.cursor()
         cur.execute("SELECT id, code, description, updated_at FROM heat_treatment ORDER BY updated_at DESC")
         return cur.fetchall()
-    
+
     def fetch_surface_treatments(self):
         cur = self.conn.cursor()
         cur.execute("SELECT id, code, description, updated_at FROM surface_treatment ORDER BY updated_at DESC")
         return cur.fetchall()
-    
+
     def read_heat_treatment(self, tid: int):
         cur = self.conn.cursor()
         cur.execute("SELECT * FROM heat_treatment WHERE id=?", (int(tid),))
@@ -1778,7 +1778,7 @@ class Database:
         if row is None:
             raise ValueError("Trattamento termico non trovato")
         return row
-    
+
     def read_surface_treatment(self, tid: int):
         cur = self.conn.cursor()
         cur.execute("SELECT * FROM surface_treatment WHERE id=?", (int(tid),))
@@ -1786,7 +1786,7 @@ class Database:
         if row is None:
             raise ValueError("Trattamento superficiale non trovato")
         return row
-    
+
     def create_heat_treatment(self, code: Optional[str], description: str, characteristics: str, standard: str, notes: str) -> int:
         code = normalize_upper(code) if (code or "").strip() else self._auto_code("HEAT")
         cur = self.conn.cursor()
@@ -1796,7 +1796,7 @@ class Database:
         )
         self.conn.commit()
         return int(cur.lastrowid)
-    
+
     def update_heat_treatment(self, tid: int, description: str, characteristics: str, standard: str, notes: str) -> None:
         cur = self.conn.cursor()
         cur.execute(
@@ -1804,12 +1804,12 @@ class Database:
             (normalize_upper(description), normalize_upper(characteristics), normalize_upper(standard), normalize_upper(notes), now_str(), int(tid)),
         )
         self.conn.commit()
-    
+
     def delete_heat_treatment(self, tid: int) -> None:
         cur = self.conn.cursor()
         cur.execute("DELETE FROM heat_treatment WHERE id=?", (int(tid),))
         self.conn.commit()
-    
+
     def create_surface_treatment(self, code: Optional[str], description: str, characteristics: str, standard: str, notes: str) -> int:
         code = normalize_upper(code) if (code or "").strip() else self._auto_code("SURF")
         cur = self.conn.cursor()
@@ -1819,7 +1819,7 @@ class Database:
         )
         self.conn.commit()
         return int(cur.lastrowid)
-    
+
     def update_surface_treatment(self, tid: int, description: str, characteristics: str, standard: str, notes: str) -> None:
         cur = self.conn.cursor()
         cur.execute(
@@ -1827,7 +1827,7 @@ class Database:
             (normalize_upper(description), normalize_upper(characteristics), normalize_upper(standard), normalize_upper(notes), now_str(), int(tid)),
         )
         self.conn.commit()
-    
+
     def delete_surface_treatment(self, tid: int) -> None:
         cur = self.conn.cursor()
         cur.execute("DELETE FROM surface_treatment WHERE id=?", (int(tid),))
@@ -1920,52 +1920,52 @@ class Database:
         cur = self.conn.cursor()
         cur.execute("DELETE FROM manual_version WHERE id=?", (int(entry_id),))
         self.conn.commit()
-    
+
     # -------- Semilavorati --------
     def fetch_semi_types(self):
         cur = self.conn.cursor()
         cur.execute("SELECT id, code, description FROM semi_type ORDER BY description")
         return cur.fetchall()
-    
+
     def fetch_semi_states(self):
         cur = self.conn.cursor()
         cur.execute("SELECT id, code, description FROM semi_state ORDER BY description")
         return cur.fetchall()
-    
+
     def create_semi_type(self, code: Optional[str], description: str) -> int:
         code = normalize_upper(code) if (code or "").strip() else self._auto_code("TYPE")
         cur = self.conn.cursor()
         cur.execute("INSERT INTO semi_type(code, description) VALUES(?, ?)", (normalize_upper(code), normalize_upper(description)))
         self.conn.commit()
         return int(cur.lastrowid)
-    
+
     def update_semi_type(self, tid: int, description: str) -> None:
         cur = self.conn.cursor()
         cur.execute("UPDATE semi_type SET description=? WHERE id=?", (normalize_upper(description), int(tid)))
         self.conn.commit()
-    
+
     def delete_semi_type(self, tid: int) -> None:
         cur = self.conn.cursor()
         cur.execute("DELETE FROM semi_type WHERE id=?", (int(tid),))
         self.conn.commit()
-    
+
     def create_semi_state(self, code: Optional[str], description: str) -> int:
         code = normalize_upper(code) if (code or "").strip() else self._auto_code("STATE")
         cur = self.conn.cursor()
         cur.execute("INSERT INTO semi_state(code, description) VALUES(?, ?)", (normalize_upper(code), normalize_upper(description)))
         self.conn.commit()
         return int(cur.lastrowid)
-    
+
     def update_semi_state(self, sid: int, description: str) -> None:
         cur = self.conn.cursor()
         cur.execute("UPDATE semi_state SET description=? WHERE id=?", (normalize_upper(description), int(sid)))
         self.conn.commit()
-    
+
     def delete_semi_state(self, sid: int) -> None:
         cur = self.conn.cursor()
         cur.execute("DELETE FROM semi_state WHERE id=?", (int(sid),))
         self.conn.commit()
-    
+
     def search_semi_items(self, q: str = "", only_preferred_dimension: bool = False):
         q = (q or "").strip()
         cur = self.conn.cursor()
@@ -2022,7 +2022,7 @@ class Database:
         sql += " ORDER BY CASE WHEN pd.id IS NULL THEN 0 ELSE 1 END DESC, si.updated_at DESC"
         cur.execute(sql, tuple(params))
         return cur.fetchall()
-    
+
     def fetch_semis_by_material(self, material_id: int):
         cur = self.conn.cursor()
         cur.execute(
@@ -2039,7 +2039,7 @@ class Database:
             (int(material_id),),
         )
         return cur.fetchall()
-    
+
     def read_semi_item(self, item_id: int):
         cur = self.conn.cursor()
         cur.execute(
@@ -2061,7 +2061,7 @@ class Database:
         if row is None:
             raise ValueError("Semilavorato non trovato")
         return row
-    
+
     def create_semi_item(self, payload: Dict[str, Any]) -> int:
         cur = self.conn.cursor()
         cur.execute(
@@ -2084,7 +2084,7 @@ class Database:
         )
         self.conn.commit()
         return int(cur.lastrowid)
-    
+
     def update_semi_item(self, item_id: int, payload: Dict[str, Any]) -> None:
         cur = self.conn.cursor()
         cur.execute(
@@ -2107,7 +2107,7 @@ class Database:
             ),
         )
         self.conn.commit()
-    
+
     def delete_semi_item(self, item_id: int) -> None:
         cur = self.conn.cursor()
         cur.execute("DELETE FROM semi_item WHERE id=?", (int(item_id),))
@@ -2467,4 +2467,3 @@ class Database:
 
         # Formula: kg/m = area_mm2 * density_g_cm3 / 1000
         return (area * density) / 1000.0
-    

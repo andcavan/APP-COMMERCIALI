@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -2076,6 +2076,3 @@ class SemilavoratiTab(ctk.CTkFrame):
             self.box_dims.set_semi_item(None)
         except Exception as e:
             messagebox.showerror("Semilavorati", f"Errore eliminazione: {e}")
-
-
-

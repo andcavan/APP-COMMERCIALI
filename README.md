@@ -21,11 +21,6 @@ pip install -r requirements.txt
 python app.py
 ```
 
-In alternativa:
-```bash
-python app.py
-```
-
 ## Struttura
 - `unificati_manager/database/` → contiene `unificati_manager.db` (creato al primo avvio)
 - `unificati_manager/main_app.py` → costruzione GUI e tab principali

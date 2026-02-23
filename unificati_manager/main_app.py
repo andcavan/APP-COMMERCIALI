@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 
@@ -150,11 +150,11 @@ class App(ctk.CTk):
         self.is_dark_mode = not self.is_dark_mode
         self.palette = apply_style(dark=self.is_dark_mode)
         configure_treeview_style(self, self.palette)
-        
+
         # Distrugge i widget esistenti prima di ricostruire
         for child in self.winfo_children():
             child.destroy()
-        
+
         # Ricostruisce l'interfaccia per applicare il nuovo tema
         self._build_ui()
         self._apply_read_only_ui()
@@ -255,7 +255,7 @@ class App(ctk.CTk):
         # Frame superiore con pulsante tema
         header_frame = ctk.CTkFrame(self, fg_color="transparent")
         header_frame.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 0))
-        
+
         theme_btn = ctk.CTkButton(
             header_frame,
             text="☀️ Light" if self.is_dark_mode else "🌙 Dark",
@@ -263,7 +263,7 @@ class App(ctk.CTk):
             command=self.toggle_theme
         )
         theme_btn.pack(side="right", padx=5)
-        
+
         self.main_tabs = ctk.CTkTabview(self)
         self.main_tabs.grid(row=1, column=0, sticky="nsew", padx=10, pady=(5, 10))
 

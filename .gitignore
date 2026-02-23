@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Database e backup (generati a runtime)
+unificati_manager/database/
+unificati_manager/backups/
+
+# Ambienti virtuali
+.venv/
+venv/
+env/
+
+# Editor
+.vscode/settings.json
+*.code-workspace
